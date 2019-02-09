@@ -277,7 +277,7 @@ class DRAWCell:
 
         # update the encoder cell
         encoder_inputs = tf.concat([r_t, h_dec_tm1], axis=1)
-        enc_gates = tf.matmul(h_enc_tm1, self.enc_rnn_h_kernel) + tf.matmul(encoder_inputs, self.enc_rnn_x_kernel) + self.enc_rnn_bias
+        enc_gates = tf.matmul(encoder_inputs, self.enc_rnn_x_kernel) + tf.matmul(h_enc_tm1, self.enc_rnn_h_kernel) + tf.expand_dims(self.enc_rnn_bias, 0)
         f, i, o, j = tf.split(enc_gates, 4, axis=1)
         f = tf.nn.sigmoid(f + 1.0)
         i = tf.nn.sigmoid(i)
@@ -288,21 +288,18 @@ class DRAWCell:
         enc_state_t = tf.concat([h_enc_t, c_enc_t], axis=1)
 
         # inference: compute posterior for z distribution; our recognition model assumes it's a diagonal gaussian.
-        z_t_mu = tf.matmul(h_enc_t, self.z_mu_kernel)  + tf.expand_dims(self.z_mu_bias, 0)
-        z_t_log_sigma = tf.matmul(h_enc_t, self.z_logsigma_kernel)  + tf.expand_dims(self.z_logsigma_bias, 0)
+        z_t_mu = tf.matmul(h_enc_t, self.z_mu_kernel) + tf.expand_dims(self.z_mu_bias, 0)
+        z_t_log_sigma = tf.matmul(h_enc_t, self.z_logsigma_kernel) + tf.expand_dims(self.z_logsigma_bias, 0)
 
-        epsilons_t = self.epsilons[:, (t - 1),
-                     :]  # subtract 1 because array index of epsilons is zero-based; time index is 1-based.
-        # epsilons_t = self.epsilons
+        epsilons_t = self.epsilons[:, (t - 1), :]   # recurrence time index t starts at 1, gotta subtract to get appropriate index.
+
         z_prior_sample_t = epsilons_t
         z_posterior_sample_t = z_t_mu + tf.exp(z_t_log_sigma) * epsilons_t
 
-        # sample the z's for this timestep from the appropriate distribution
-        # our prior at every timestep is an isotropic gaussian.
         z_t = tf.cond(self.do_inference, true_fn=lambda: z_posterior_sample_t, false_fn=lambda: z_prior_sample_t)
 
         # update the decoder cell
-        dec_gates = tf.matmul(h_dec_tm1, self.dec_rnn_h_kernel) + tf.matmul(z_t, self.dec_rnn_x_kernel) + self.dec_rnn_bias
+        dec_gates = tf.matmul(z_t, self.dec_rnn_x_kernel) + tf.matmul(h_dec_tm1, self.dec_rnn_h_kernel) + tf.expand_dims(self.dec_rnn_bias, 0)
         f, i, o, j = tf.split(dec_gates, 4, axis=1)
         f = tf.nn.sigmoid(f + 1.0)
         i = tf.nn.sigmoid(i)
