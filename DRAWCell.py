@@ -34,7 +34,7 @@ class DRAWCell:
 
         self.kernel_initializer = tf.random_uniform_initializer(-0.1, 0.1)
 
-        self.x = tf.placeholder(dtype=tf.float32, shape=[None, img_width, img_height, img_channels])
+        self.x = tf.placeholder(dtype=tf.float32, shape=[None, self.img_dim_B, self.img_dim_A, self.img_channels])
         self.do_inference = tf.placeholder(dtype=tf.bool, shape=[])
 
         self.read_op_params_kernel = tf.get_variable(dtype=tf.float32, shape=[self.enc_dim, 5], name='read_op_params_kernel', initializer=self.kernel_initializer)
@@ -116,10 +116,12 @@ class DRAWCell:
 
         self.kl_div_1_thru_T = kl_divs_thus_far[self.num_timesteps]
 
+        # reconstruction loss is based on binary cross entropy:
         cross_entropy_terms = -(
             (self.x) * tf.log(self.D_X_given_canvas_T + 1e-8) + \
             (1.0 - self.x) * (tf.log(1.0 - self.D_X_given_canvas_T + 1e-8))
         )
+
         cross_entropy_per_image = tf.reduce_sum(cross_entropy_terms, axis=[1,2,3])
         self.elbo = tf.reduce_mean((-cross_entropy_per_image - self.kl_div_1_thru_T), axis=0)
         self.loss = -self.elbo
@@ -133,7 +135,7 @@ class DRAWCell:
 
         self.gradnorm = tf.reduce_sum([tf.reduce_sum(tf.square(g)) for g in gradients if g is not None])
 
-    def _compute_attn_filters(self, hidden_vec, params_kernel, params_bias, grid_dim):
+    def _compute_five_numbers(self, hidden_vec, params_kernel, params_bias):
         five_numbers = tf.matmul(hidden_vec, params_kernel) + tf.expand_dims(params_bias, 0)
         g_tilde_X = five_numbers[:, 0]
         g_tilde_Y = five_numbers[:, 1]
@@ -141,10 +143,14 @@ class DRAWCell:
         log_of_delta_tilde = five_numbers[:, 3]
         log_of_gamma = five_numbers[:, 4]
 
-        N = grid_dim
         sigma_squared = tf.exp(log_of_sigma_squared)
         delta_tilde = tf.exp(log_of_delta_tilde)
         gamma = tf.exp(log_of_gamma)
+
+        return g_tilde_X, g_tilde_Y, sigma_squared, delta_tilde, gamma
+
+    def _compute_attn_filters(self, five, N):
+        g_tilde_X, g_tilde_Y, sigma_squared, delta_tilde, gamma = five
 
         g_X = tf.constant((float(self.img_dim_A + 1) / 2.0)) * (g_tilde_X + 1.0)  # shape: [batch_size]
         g_Y = tf.constant((float(self.img_dim_B + 1) / 2.0)) * (g_tilde_Y + 1.0)  # shape: [batch_size]
@@ -189,10 +195,8 @@ class DRAWCell:
         F_X_exp_arg_numerators = tf.square(img_position_ints_A - mu_X_vec)  # shape: [batch_size, N, A]
         F_Y_exp_arg_numerators = tf.square(img_position_ints_B - mu_Y_vec)  # shape: [batch_size, N, B]
 
-        F_X_exp_arg_denominators = 2.0 * tf.expand_dims(tf.expand_dims(sigma_squared, -1),
-                                                        -1)  # shape: [batch_size, 1, 1]
-        F_Y_exp_arg_denominators = 2.0 * tf.expand_dims(tf.expand_dims(sigma_squared, -1),
-                                                        -1)  # shape: [batch_size, 1, 1]
+        F_X_exp_arg_denominators = 2.0 * tf.expand_dims(tf.expand_dims(sigma_squared, -1), -1)  # shape: [batch_size, 1, 1]
+        F_Y_exp_arg_denominators = 2.0 * tf.expand_dims(tf.expand_dims(sigma_squared, -1), -1)  # shape: [batch_size, 1, 1]
 
         F_X_exp_args = -(F_X_exp_arg_numerators / F_X_exp_arg_denominators)  # shape: [batch_size, N, A]
         F_Y_exp_args = -(F_Y_exp_arg_numerators / F_Y_exp_arg_denominators)  # shape: [batch_size, N, B]
@@ -208,14 +212,14 @@ class DRAWCell:
 
         return F_X, F_Y, gamma
 
-    def _compute_read_filters(self, hidden_dec_tm1):
-        F_X, F_Y, gamma = self._compute_attn_filters(hidden_dec_tm1, self.read_op_params_kernel, self.read_op_params_bias,
-                                                grid_dim=self.read_dim)
+    def _compute_read_filters(self, h_dec_tm1):
+        five = self._compute_five_numbers(h_dec_tm1, self.read_op_params_kernel, self.read_op_params_bias)
+        F_X, F_Y, gamma = self._compute_attn_filters(five, N=self.read_dim)
         return F_X, F_Y, gamma
 
-    def _compute_write_filters(self, hidden_dec_t):
-        F_hat_X, F_hat_Y, gamma_hat = self._compute_attn_filters(hidden_dec_t, self.write_op_params_kernel,
-                                                            self.write_op_params_bias, grid_dim=self.write_dim)
+    def _compute_write_filters(self, h_dec_t):
+        five = self._compute_five_numbers(h_dec_t, self.write_op_params_kernel, self.write_op_params_bias)
+        F_hat_X, F_hat_Y, gamma_hat = self._compute_attn_filters(five, N=self.write_dim)
         return F_hat_X, F_hat_Y, gamma_hat
 
     def _read_op(self, x_batch, F_X, F_Y):
@@ -223,13 +227,13 @@ class DRAWCell:
         F_X = tf.expand_dims(F_X, 1)  # [Batch, 1, N, A]
         F_Y = tf.expand_dims(F_Y, 1)  # [Batch, 1, N, B]
 
-        F_X = tf.tile(F_X, multiples=[1, self.img_channels, 1, 1])
-        F_Y = tf.tile(F_Y, multiples=[1, self.img_channels, 1, 1])
+        F_X = tf.tile(F_X, multiples=[1, self.img_channels, 1, 1])    # [Batch, channels, N, A]
+        F_Y = tf.tile(F_Y, multiples=[1, self.img_channels, 1, 1])    # [Batch, channels, N, B]
 
         F_X_T = tf.transpose(F_X, perm=[0, 1, 3, 2])  # [Batch, channels, A, N]
 
         read_x_t = tf.matmul(
-            F_Y,  # [Batch, 1, N, B]
+            F_Y,  # [Batch, channels, N, B]
             tf.matmul(x_batch, F_X_T)  # [Batch, channels, B, A] x [Batch, channels, A, N] = [Batch, channels, B, N]
         )
         # [Batch, channels, N, B] x [Batch, channels, B, N] = [Batch, channels, N, N]
@@ -248,15 +252,15 @@ class DRAWCell:
 
         F_Y_hat_T = tf.transpose(F_Y_hat, perm=[0, 1, 3, 2])  # [Batch, channels, B, N]
 
-        write_t = tf.matmul(
+        write_w_t = tf.matmul(
             F_Y_hat_T,  # [Batch, channels, B, N]
             tf.matmul(w_t, F_X_hat)  # [Batch, channels, N, N] x [Batch, channels, N, A] = [Batch, channels, N, A]
         )
         # [Batch, channels, B, N] x [Batch, channels, N, A] = [Batch, channels, B, A]
 
-        write_t = tf.transpose(write_t, [0, 2, 3, 1])  # [Batch, B, A, channels]
+        write_w_t = tf.transpose(write_w_t, [0, 2, 3, 1])  # [Batch, B, A, channels]
 
-        return write_t
+        return write_w_t
 
     def _recurrence(self, t, canvas_tm1, enc_state_tm1, dec_state_tm1, kl_div_0_thru_tm1, drawings_over_time):
         x_hat_t = self.x - tf.nn.sigmoid(canvas_tm1)
@@ -291,7 +295,7 @@ class DRAWCell:
         z_t_mu = tf.matmul(h_enc_t, self.z_mu_kernel) + tf.expand_dims(self.z_mu_bias, 0)
         z_t_log_sigma = tf.matmul(h_enc_t, self.z_logsigma_kernel) + tf.expand_dims(self.z_logsigma_bias, 0)
 
-        epsilons_t = self.epsilons[:, (t - 1), :]   # recurrence time index t starts at 1, gotta subtract to get appropriate index.
+        epsilons_t = self.epsilons[:, (t-1), :]   # recurrence time index t starts at 1, gotta subtract to get appropriate index.
 
         z_prior_sample_t = epsilons_t
         z_posterior_sample_t = z_t_mu + tf.exp(z_t_log_sigma) * epsilons_t
@@ -349,6 +353,7 @@ class DRAWCell:
         return t + 1, canvas_t, enc_state_t, dec_state_t, kl_div_0_thru_t, drawings_over_time
 
     def train(self, sess, imgs):
+        # train the DRAW model for one gradient step
         feed_dict = {
             self.x: imgs,
             self.do_inference: True
@@ -357,6 +362,8 @@ class DRAWCell:
         return elbo, gradnorm
 
     def reconstruct(self, sess, imgs):
+        # use DRAW model to generate reconstructions of given images
+
         feed_dict = {
             self.x: imgs,
             self.do_inference: True
@@ -365,7 +372,13 @@ class DRAWCell:
         return drawings_over_time
 
     def sample(self, sess, num_imgs):
-        # use some empty_images for self.x placeholder
+        # use DRAW model to generate some new images by sampling from the prior
+
+        # when running this, the generation process does not depend on any input image.
+        # to enforce this, we use a boolean placeholder 'do_inference', and set it to False.
+        # this causes the model to sample epsilons directly rather than sample mu + sigma * epsilons.
+        #
+        # we also pass in some empty_images for self.x, the placeholder for the input images.
         # this is simply so we dont have to write a different computation graph for sampling.
         # the priors are what is sampled from, and the input images and the encoder rnn have no impact on the output.
         #
