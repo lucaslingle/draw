@@ -13,9 +13,7 @@ class DRAWCell:
                  dec_dim,
                  read_dim,
                  write_dim,
-                 num_timesteps,
-                 reuse=False,
-                 name=None):
+                 num_timesteps):
 
         assert read_dim >= 2
 
@@ -32,108 +30,110 @@ class DRAWCell:
 
         self.num_timesteps = num_timesteps
 
-        self.kernel_initializer = tf.random_uniform_initializer(-0.1, 0.1)
+        with tf.variable_scope('DRAW'):
 
-        self.x = tf.placeholder(dtype=tf.float32, shape=[None, self.img_dim_B, self.img_dim_A, self.img_channels])
-        self.do_inference = tf.placeholder(dtype=tf.bool, shape=[])
+            self.kernel_initializer = tf.random_uniform_initializer(-0.1, 0.1)
 
-        self.read_op_params_kernel = tf.get_variable(dtype=tf.float32, shape=[self.enc_dim, 5], name='read_op_params_kernel', initializer=self.kernel_initializer)
-        self.write_op_params_kernel = tf.get_variable(dtype=tf.float32, shape=[self.dec_dim, 5], name='write_op_params_kernel', initializer=self.kernel_initializer)
+            self.x = tf.placeholder(dtype=tf.float32, shape=[None, self.img_dim_B, self.img_dim_A, self.img_channels])
+            self.do_inference = tf.placeholder(dtype=tf.bool, shape=[])
 
-        self.write_patch_kernel = tf.get_variable(dtype=tf.float32, shape=[self.dec_dim, (self.write_dim * self.write_dim * self.img_channels)], name='write_patch_kernel', initializer=self.kernel_initializer)
+            self.read_op_params_kernel = tf.get_variable(dtype=tf.float32, shape=[self.enc_dim, 5], name='read_op_params_kernel', initializer=self.kernel_initializer)
+            self.write_op_params_kernel = tf.get_variable(dtype=tf.float32, shape=[self.dec_dim, 5], name='write_op_params_kernel', initializer=self.kernel_initializer)
 
-        self.read_op_params_bias = tf.get_variable(dtype=tf.float32, shape=[5], name='read_op_params_bias', initializer=tf.zeros_initializer())
-        self.write_op_params_bias = tf.get_variable(dtype=tf.float32, shape=[5], name='write_op_params_bias', initializer=tf.zeros_initializer())
+            self.write_patch_kernel = tf.get_variable(dtype=tf.float32, shape=[self.dec_dim, (self.write_dim * self.write_dim * self.img_channels)], name='write_patch_kernel', initializer=self.kernel_initializer)
 
-        self.write_patch_bias = tf.get_variable(dtype=tf.float32, shape=[(self.write_dim * self.write_dim * self.img_channels)], name='write_patch_bias', initializer=tf.zeros_initializer())
+            self.read_op_params_bias = tf.get_variable(dtype=tf.float32, shape=[5], name='read_op_params_bias', initializer=tf.zeros_initializer())
+            self.write_op_params_bias = tf.get_variable(dtype=tf.float32, shape=[5], name='write_op_params_bias', initializer=tf.zeros_initializer())
 
-        self.z_mu_kernel = tf.get_variable(dtype=tf.float32, shape=[self.enc_dim, self.z_dim], name='z_mu_kernel', initializer=self.kernel_initializer)
-        self.z_logsigma_kernel = tf.get_variable(dtype=tf.float32, shape=[self.enc_dim, self.z_dim], name='z_logsigma_kernel', initializer=self.kernel_initializer)
+            self.write_patch_bias = tf.get_variable(dtype=tf.float32, shape=[(self.write_dim * self.write_dim * self.img_channels)], name='write_patch_bias', initializer=tf.zeros_initializer())
 
-        self.z_mu_bias = tf.get_variable(dtype=tf.float32, shape=[self.z_dim], name='z_mu_bias', initializer=tf.zeros_initializer())
-        self.z_logsigma_bias = tf.get_variable(dtype=tf.float32, shape=[self.z_dim], name='z_logsigma_bias', initializer=tf.zeros_initializer())
+            self.z_mu_kernel = tf.get_variable(dtype=tf.float32, shape=[self.enc_dim, self.z_dim], name='z_mu_kernel', initializer=self.kernel_initializer)
+            self.z_logsigma_kernel = tf.get_variable(dtype=tf.float32, shape=[self.enc_dim, self.z_dim], name='z_logsigma_kernel', initializer=self.kernel_initializer)
 
-        self.canvas_initial = tf.get_variable(
-            dtype=tf.float32, shape=[self.img_dim_B, self.img_dim_A, self.img_channels], name='canvas_initial',
-            initializer=tf.constant_initializer(value=0.0),
-            trainable=True)
+            self.z_mu_bias = tf.get_variable(dtype=tf.float32, shape=[self.z_dim], name='z_mu_bias', initializer=tf.zeros_initializer())
+            self.z_logsigma_bias = tf.get_variable(dtype=tf.float32, shape=[self.z_dim], name='z_logsigma_bias', initializer=tf.zeros_initializer())
 
-        batch_size = tf.shape(self.x)[0]
-        self.epsilons = tf.random_normal(shape=[batch_size, self.num_timesteps, self.z_dim])
+            self.canvas_initial = tf.get_variable(
+                dtype=tf.float32, shape=[self.img_dim_B, self.img_dim_A, self.img_channels], name='canvas_initial',
+                initializer=tf.constant_initializer(value=0.0),
+                trainable=True)
 
-        self.enc_rnn_h_kernel = tf.get_variable(dtype=tf.float32, shape=[self.enc_dim, 4 * self.enc_dim], name='enc_rnn_h_kernel')
-        self.enc_rnn_x_kernel = tf.get_variable(dtype=tf.float32, shape=[(2 * self.read_dim * self.read_dim * self.img_channels + self.dec_dim), 4 * self.enc_dim], name='enc_rnn_x_kernel')
+            batch_size = tf.shape(self.x)[0]
+            self.epsilons = tf.random_normal(shape=[batch_size, self.num_timesteps, self.z_dim])
 
-        self.dec_rnn_h_kernel = tf.get_variable(dtype=tf.float32, shape=[self.dec_dim, 4 * self.dec_dim], name='dec_rnn_h_kernel')
-        self.dec_rnn_x_kernel = tf.get_variable(dtype=tf.float32, shape=[self.z_dim, 4 * self.dec_dim], name='dec_rnn_x_kernel')
+            self.enc_rnn_h_kernel = tf.get_variable(dtype=tf.float32, shape=[self.enc_dim, 4 * self.enc_dim], name='enc_rnn_h_kernel')
+            self.enc_rnn_x_kernel = tf.get_variable(dtype=tf.float32, shape=[(2 * self.read_dim * self.read_dim * self.img_channels + self.dec_dim), 4 * self.enc_dim], name='enc_rnn_x_kernel')
 
-        self.enc_rnn_bias = tf.get_variable(dtype=tf.float32, shape=[4 * self.enc_dim], name='enc_rnn_bias')
-        self.dec_rnn_bias = tf.get_variable(dtype=tf.float32, shape=[4 * self.dec_dim], name='dec_rnn_bias')
+            self.dec_rnn_h_kernel = tf.get_variable(dtype=tf.float32, shape=[self.dec_dim, 4 * self.dec_dim], name='dec_rnn_h_kernel')
+            self.dec_rnn_x_kernel = tf.get_variable(dtype=tf.float32, shape=[self.z_dim, 4 * self.dec_dim], name='dec_rnn_x_kernel')
 
-        self.encoder_initial = tf.get_variable(dtype=tf.float32, shape=[2 * self.enc_dim], name='enc_initial_state',
-                                               initializer=tf.constant_initializer(0.0), trainable=True)
+            self.enc_rnn_bias = tf.get_variable(dtype=tf.float32, shape=[4 * self.enc_dim], name='enc_rnn_bias')
+            self.dec_rnn_bias = tf.get_variable(dtype=tf.float32, shape=[4 * self.dec_dim], name='dec_rnn_bias')
 
-        self.decoder_initial = tf.get_variable(dtype=tf.float32, shape=[2 * self.dec_dim], name='dec_initial_state',
-                                               initializer=tf.constant_initializer(0.0), trainable=True)
+            self.encoder_initial = tf.get_variable(dtype=tf.float32, shape=[2 * self.enc_dim], name='enc_initial_state',
+                                                   initializer=tf.constant_initializer(0.0), trainable=True)
 
-        drawings_over_time = tensor_array_ops.TensorArray(dtype=tf.float32, size=(self.num_timesteps+1),
-                                                          dynamic_size=False, infer_shape=True)
+            self.decoder_initial = tf.get_variable(dtype=tf.float32, shape=[2 * self.dec_dim], name='dec_initial_state',
+                                                   initializer=tf.constant_initializer(0.0), trainable=True)
 
-        canvas_initial_state = tf.tile(
-            tf.expand_dims(self.canvas_initial, 0),
-            multiples=[batch_size, 1, 1, 1])
+            drawings_over_time = tensor_array_ops.TensorArray(dtype=tf.float32, size=(self.num_timesteps+1),
+                                                              dynamic_size=False, infer_shape=True)
 
-        drawings_over_time = drawings_over_time.write(0, tf.nn.sigmoid(canvas_initial_state))
+            canvas_initial_state = tf.tile(
+                tf.expand_dims(self.canvas_initial, 0),
+                multiples=[batch_size, 1, 1, 1])
 
-        encoder_initial_state = tf.tile(
-            tf.expand_dims(self.encoder_initial, 0),
-            multiples=[batch_size, 1])
+            drawings_over_time = drawings_over_time.write(0, tf.nn.sigmoid(canvas_initial_state))
 
-        decoder_initial_state = tf.tile(
-            tf.expand_dims(self.decoder_initial, 0),
-            multiples=[batch_size, 1])
+            encoder_initial_state = tf.tile(
+                tf.expand_dims(self.encoder_initial, 0),
+                multiples=[batch_size, 1])
 
-        canvases_over_time = {}
-        encoder_states = {}
-        decoder_states = {}
-        kl_divs_thus_far = {}
+            decoder_initial_state = tf.tile(
+                tf.expand_dims(self.decoder_initial, 0),
+                multiples=[batch_size, 1])
 
-        canvases_over_time[0] = canvas_initial_state
-        encoder_states[0] = encoder_initial_state
-        decoder_states[0] = decoder_initial_state
-        kl_divs_thus_far[0] = tf.zeros(dtype=tf.float32, shape=[batch_size])
+            canvases_over_time = {}
+            encoder_states = {}
+            decoder_states = {}
+            kl_divs_thus_far = {}
 
-        for t in range(1, self.num_timesteps+1):
-            tp1, canvases_over_time[t], encoder_states[t], decoder_states[t], kl_divs_thus_far[t], drawings_over_time = self._recurrence(
-                t, canvases_over_time[t-1], encoder_states[t-1], decoder_states[t-1], kl_divs_thus_far[t-1], drawings_over_time)
+            canvases_over_time[0] = canvas_initial_state
+            encoder_states[0] = encoder_initial_state
+            decoder_states[0] = decoder_initial_state
+            kl_divs_thus_far[0] = tf.zeros(dtype=tf.float32, shape=[batch_size])
 
-        self.canvas_T = canvases_over_time[self.num_timesteps]
+            for t in range(1, self.num_timesteps+1):
+                tp1, canvases_over_time[t], encoder_states[t], decoder_states[t], kl_divs_thus_far[t], drawings_over_time = self._recurrence(
+                    t, canvases_over_time[t-1], encoder_states[t-1], decoder_states[t-1], kl_divs_thus_far[t-1], drawings_over_time)
 
-        self.drawings_over_time = drawings_over_time.stack()
-        self.drawings_over_time = tf.transpose(self.drawings_over_time, perm=[1, 0, 2, 3, 4])
+            self.canvas_T = canvases_over_time[self.num_timesteps]
 
-        self.D_X_given_canvas_T = tf.nn.sigmoid(self.canvas_T)
+            self.drawings_over_time = drawings_over_time.stack()
+            self.drawings_over_time = tf.transpose(self.drawings_over_time, perm=[1, 0, 2, 3, 4])
 
-        self.kl_div_1_thru_T = kl_divs_thus_far[self.num_timesteps]
+            self.D_X_given_canvas_T = tf.nn.sigmoid(self.canvas_T)
 
-        # reconstruction loss is based on binary cross entropy:
-        cross_entropy_terms = -(
-            (self.x) * tf.log(self.D_X_given_canvas_T + 1e-8) + \
-            (1.0 - self.x) * (tf.log(1.0 - self.D_X_given_canvas_T + 1e-8))
-        )
+            self.kl_div_1_thru_T = kl_divs_thus_far[self.num_timesteps]
 
-        cross_entropy_per_image = tf.reduce_sum(cross_entropy_terms, axis=[1,2,3])
-        self.elbo = tf.reduce_mean((-cross_entropy_per_image - self.kl_div_1_thru_T), axis=0)
-        self.loss = -self.elbo
+            # reconstruction loss is based on binary cross entropy:
+            cross_entropy_terms = -(
+                (self.x) * tf.log(self.D_X_given_canvas_T + 1e-8) + \
+                (1.0 - self.x) * (tf.log(1.0 - self.D_X_given_canvas_T + 1e-8))
+            )
 
-        self.optimizer = tf.train.AdamOptimizer(1e-3)
+            cross_entropy_per_image = tf.reduce_sum(cross_entropy_terms, axis=[1,2,3])
+            self.elbo = tf.reduce_mean((-cross_entropy_per_image - self.kl_div_1_thru_T), axis=0)
+            self.loss = -self.elbo
 
-        tvars = tf.trainable_variables()
-        gradients, _ = zip(*self.optimizer.compute_gradients(loss=self.loss, var_list=tvars))
-        gradients = [None if g is None else tf.clip_by_norm(g, 5.0) for g in gradients]
-        self.train_op = self.optimizer.apply_gradients(zip(gradients, tvars))
+            self.optimizer = tf.train.AdamOptimizer(1e-3)
 
-        self.gradnorm = tf.reduce_sum([tf.reduce_sum(tf.square(g)) for g in gradients if g is not None])
+            tvars = [v for v in tf.trainable_variables() if v.name.startswith('DRAW')]
+            gradients, _ = zip(*self.optimizer.compute_gradients(loss=self.loss, var_list=tvars))
+            gradients = [None if g is None else tf.clip_by_norm(g, 5.0) for g in gradients]
+            self.train_op = self.optimizer.apply_gradients(zip(gradients, tvars))
+
+            self.gradnorm = tf.reduce_sum([tf.reduce_sum(tf.square(g)) for g in gradients if g is not None])
 
     def _compute_five_numbers(self, hidden_vec, params_kernel, params_bias):
         five_numbers = tf.matmul(hidden_vec, params_kernel) + tf.expand_dims(params_bias, 0)
